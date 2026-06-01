@@ -41,6 +41,8 @@ AR_Giga_AutoDrive_GPS/
 ├── Example_3_LIDAR_Obstacle_Avoidance/    # Lesson 3: LIDAR avoidance
 ├── Example_4_GPS_IMU_Integrated_Navigation/ # Capstone: Full navigation
 ├── class_libs/                            # Shared library headers
+├── IMUTest/                               # IMU heading stability demo
+├── IMUCalibration/                        # Magnetometer offset finder
 ├── AR_Giga_AutoDrive_GPS.ino              # Original working code (reference)
 ├── README.md                              # This file
 └── CHANGELOG.md                           # Version history
@@ -152,6 +154,22 @@ The original codebase had several issues that caused the integrated navigation t
 - [REFACTOR_README.md](REFACTOR_README.md) - Complete documentation
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 - `AR_Giga_AutoDrive_GPS.ino` - Original working code (reference only)
+
+## 🔧 IMU Tools (New!)
+
+### IMUTest - Heading Stability Demo
+Test your IMU heading stability and verify calibration offsets.
+- See `IMUTest/README.md` for details
+- Compares fused yaw vs. magnetometer-calculated heading
+- Quality indicators for stability assessment
+
+### IMUCalibration - Magnetometer Offset Finder
+Find accurate magnetometer calibration offsets using figure-8 method.
+- See `IMUCalibration/README.md` for details
+- Interactive calibration with live min/max tracking
+- Outputs copy-paste ready offset values
+
+**Workflow:** Calibrate first → Test with IMUTest → Use in production code
 
 ## 📝 License
 

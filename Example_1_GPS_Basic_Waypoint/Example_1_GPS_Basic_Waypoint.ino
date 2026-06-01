@@ -64,8 +64,8 @@
 
 // Replace these coordinates with your desired waypoint
 // You can get coordinates from Google Maps (right-click on a location)
-const double TARGET_LATITUDE  = 40.342258;   // Example: near starting point
-const double TARGET_LONGITUDE = -74.696684;
+const double TARGET_LATITUDE  = 40.34264395730789;   // Example: near starting point
+const double TARGET_LONGITUDE = -74.70007429916718;
 
 // ============================================================================
 // GLOBAL OBJECTS
@@ -138,7 +138,7 @@ void loop() {
     TARGET_LATITUDE, TARGET_LONGITUDE
   );
   
-  float bearingToWaypoint = gps.bearingTo(
+  float bearingToWaypoint = gps.courseTo(
     currentLat, currentLon,
     TARGET_LATITUDE, TARGET_LONGITUDE
   );

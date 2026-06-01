@@ -1,26 +1,15 @@
 /*
- * Example 2: IMU Heading Maintenance (Dead Reckoning)
- * ===================================================
+ * Example 2: IMU Heading Maintenance - WITH MAGNETOMETER CALIBRATION
+ * ===================================================================
  * 
- * This example demonstrates heading control using only the IMU (Inertial 
- * Measurement Unit), without GPS. The vehicle will maintain a set heading
- * even when GPS signal is lost.
+ * This version includes proper magnetometer calibration using the figure-8 method.
+ * The magnetometer must be calibrated separately from gyro/accelerometer.
  * 
  * Hardware Required:
  *   - Arduino Giga R1 WiFi
  *   - Yahboom 9-axis IMU connected to I2C (Wire)
  *   - Steering Servo connected to Pin 7
  *   - ESC connected to Pin 6
- * 
- * How It Works:
- *   The IMU provides yaw (heading) angle via the magnetometer. We compare
- *   the current heading to a target heading and adjust steering proportionally.
- * 
- * Student Notes:
- *   - This is DEAD RECKONING - position drifts over time without GPS correction
- *   - Magnetometer must be calibrated for accurate heading
- *   - Works indoors where GPS doesn't work!
- *   - Magnetic interference can affect accuracy
  */
 
 #include <Servo.h>
@@ -52,9 +41,13 @@
 // IMU SETTINGS
 // ============================================================================
 
-// Heading offset to align IMU "North" with real North
-// Adjust this so yaw reads 0° when vehicle points North
-#define MAG_CALIBRATION_OFFSET  0.0   // Start at 0, calibrate later
+// Calibration offsets - WILL BE AUTO-CALIBRATED, then saved here
+float MAG_OFFSET_X = 0.0;
+float MAG_OFFSET_Y = 0.0;
+float MAG_OFFSET_Z = 0.0;
+
+// North alignment offset (set after mag calibration)
+float NORTH_OFFSET = 0.0;
 
 // Control parameters
 #define HEADING_GAIN     25.0    // Proportional gain for heading error (radians)
@@ -64,9 +57,7 @@
 // TARGET HEADING
 // ============================================================================
 
-// Target heading in radians (0 = North, PI/2 = East, PI = South, etc.)
-// You can set this to any direction you want the vehicle to maintain
-float targetHeading = 0.0;  // Start facing North
+float targetHeading = 0.0;  // North (will be set after calibration)
 
 // ============================================================================
 // GLOBAL VARIABLES
@@ -76,7 +67,8 @@ Servo steeringServo;  // Servo for steering
 Servo escServo;       // Servo for ESC (throttle)
 
 float currentYaw = 0;      // Current heading from IMU (radians)
-float lastError = 0;       // Previous error (for potential D-term later)
+float lastYaw = 0;         // Previous yaw for gyro integration
+unsigned long lastReadTime = 0;
 
 // ============================================================================
 // SETUP - Runs once at startup
@@ -87,7 +79,7 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   
-  Serial.println(F("\n=== IMU Heading Maintenance ==="));
+  Serial.println(F("\n=== IMU Heading Maintenance - WITH MAG CAL ==="));
   Serial.println(F("Initializing..."));
   
   // Initialize I2C bus
@@ -112,14 +104,13 @@ void setup() {
     Serial.println(F("  - Check power to IMU module"));
     while (1) {
       delay(1000);
-      blinkError();
     }
   }
   
   Serial.println(F("IMU connected successfully!"));
   
   // =====================================================
-  // CALIBRATION: Static Zeroing (Gyro & Accelerometer)
+  // CALIBRATION 1: Static Zeroing (Gyro & Accelerometer)
   // =====================================================
   Serial.println(F("\n>>> STEP 1: Static Calibration"));
   Serial.println(F("KEEP VEHICLE PERFECTLY STILL for 15 seconds..."));
@@ -135,30 +126,103 @@ void setup() {
   }
   
   // =====================================================
-  // CALIBRATION: Magnetometer (Optional but recommended)
+  // CALIBRATION 2: Magnetometer Figure-8 Method
   // =====================================================
-  Serial.println(F("\n>>> STEP 2: Magnetometer Check"));
-  Serial.println(F("Current yaw reading: "));
+  Serial.println(F("\n>>> STEP 2: Magnetometer Calibration"));
+  Serial.println(F("========================================"));
+  Serial.println(F("PICK UP THE VEHICLE and rotate in a FIGURE-8 pattern"));
+  Serial.println(F("in ALL THREE AXES (roll, pitch, yaw)"));
+  Serial.println(F("Continue for ~30 seconds until calibration completes"));
+  Serial.println(F("========================================"));
   
-  float euler[3];
-  if (IMU_I2C_ReadEuler(euler) == 0) {
-    currentYaw = euler[2];  // Yaw is the third value
-    Serial.print(currentYaw * 180.0 / PI);  // Convert to degrees for display
-    Serial.println(F(" degrees"));
+  delay(5000);  // Give you time to pick up vehicle
+  
+  Serial.println(F("\nStarting magnetometer calibration..."));
+  Serial.println(F("Rotate slowly in figure-8 pattern..."));
+  
+  int magCalResult = IMU_I2C_CalibrationMag();
+  
+  if (magCalResult == 0) {
+    Serial.println(F("\n>>> Magnetometer calibration complete!"));
     
-    // Apply calibration offset
-    currentYaw += MAG_CALIBRATION_OFFSET;
+    // Read the calculated offsets
+    float offsets[3];
+    IMU_I2C_ReadMagOffsets(offsets);
     
-    // Set initial target heading to current heading
-    targetHeading = currentYaw;
-    Serial.print(F("Target heading set to: "));
-    Serial.print(currentYaw * 180.0 / PI);
-    Serial.println(F(" degrees"));
+    MAG_OFFSET_X = offsets[0];
+    MAG_OFFSET_Y = offsets[1];
+    MAG_OFFSET_Z = offsets[2];
+    
+    Serial.println(F("\n>>> Saved Magnetometer Offsets:"));
+    Serial.print(F("  X: ")); Serial.println(MAG_OFFSET_X, 4);
+    Serial.print(F("  Y: ")); Serial.println(MAG_OFFSET_Y, 4);
+    Serial.print(F("  Z: ")); Serial.println(MAG_OFFSET_Z, 4);
+    
+    Serial.println(F("\n>>> IMPORTANT: Copy these values to your code!"));
+    Serial.println(F("   Add them as MAG_OFFSET_X/Y/Z for permanent use."));
+  } else {
+    Serial.println(F("\nWARNING: Magnetometer calibration failed!"));
+    Serial.println(F("Try again - make sure you rotate in all 3 axes"));
   }
   
+  // =====================================================
+  // CALIBRATION 3: North Alignment
+  // =====================================================
+  Serial.println(F("\n>>> STEP 3: North Alignment"));
+  Serial.println(F("Point vehicle physically NORTH (use phone compass)"));
+  delay(5000);
+  
+  float euler[3];
+  int samples = 20;
+  float sumYaw = 0;
+  
+  Serial.println(F("Taking 20 samples to average..."));
+  for (int i = 0; i < samples; i++) {
+    if (IMU_I2C_ReadEuler(euler) == 0) {
+      float rawYaw = euler[2];
+      sumYaw += rawYaw;
+      
+      // Print every 5th sample to show progress
+      if ((i + 1) % 5 == 0) {
+        Serial.print(F("  Sample "));
+        Serial.print(i + 1);
+        Serial.print(F(": "));
+        Serial.print(rawYaw * 180.0 / PI, 2);
+        Serial.println(F("°"));
+      }
+    }
+    delay(200);
+  }
+  
+  float avgYaw = sumYaw / samples;
+  Serial.println(F("\n>>> Average yaw when facing North: "));
+  Serial.print(avgYaw * 180.0 / PI, 2);
+  Serial.println(F("°"));
+  
+  // Set north offset so yaw = 0 when facing North
+  NORTH_OFFSET = -avgYaw;
+  Serial.println(F(">>> Setting NORTH_OFFSET: "));
+  Serial.print(NORTH_OFFSET * 180.0 / PI, 2);
+  Serial.println(F("°"));
+  
+  // Verify the offset works
+  if (IMU_I2C_ReadEuler(euler) == 0) {
+    currentYaw = euler[2] + NORTH_OFFSET;
+    Serial.println(F("\n>>> Verification:"));
+    Serial.print(F("  Corrected yaw when facing North: "));
+    Serial.print(currentYaw * 180.0 / PI, 2);
+    Serial.println(F("° (should be ~0°)"));
+  }
+  
+  // Set target heading to North (0 radians)
+  targetHeading = 0.0;
+  Serial.println(F("\n>>> Target heading set to: NORTH (0°)"));
+  
   Serial.println(F("\n=== Setup Complete ==="));
-  Serial.println(F("Vehicle will now maintain its heading."));
-  Serial.println(F("Press reset to change target heading."));
+  Serial.println(F("Vehicle will now maintain North heading."));
+  Serial.println(F("Press reset to re-calibrate."));
+  
+  delay(2000);
 }
 
 // ============================================================================
@@ -166,6 +230,8 @@ void setup() {
 // ============================================================================
 
 void loop() {
+  unsigned long currentTime = millis();
+  
   // =====================================================
   // STEP 1: Read IMU data
   // =====================================================
@@ -177,8 +243,8 @@ void loop() {
     return;
   }
   
-  // Extract yaw (heading) and apply calibration offset
-  currentYaw = euler[2] + MAG_CALIBRATION_OFFSET;
+  // Extract yaw (heading) and apply calibration offsets
+  currentYaw = euler[2] + NORTH_OFFSET;
   
   // Normalize yaw to range [-PI, +PI]
   while (currentYaw > PI)   currentYaw -= 2 * PI;
@@ -212,9 +278,8 @@ void loop() {
   // =====================================================
   // STEP 5: Print telemetry (every 200ms)
   // =====================================================
-  static unsigned long lastPrint = 0;
-  if (millis() - lastPrint > 200) {
-    lastPrint = millis();
+  if (currentTime - lastReadTime > 200) {
+    lastReadTime = currentTime;
     
     Serial.print(F("Yaw: "));
     Serial.print(currentYaw * 180.0 / PI, 1);  // Convert to degrees
@@ -230,62 +295,55 @@ void loop() {
   delay(CONTROL_RATE_MS);
 }
 
-// ============================================================================
-// HELPER FUNCTION: Blink LED to indicate error
-// ============================================================================
-
-void blinkError() {
-  // Simple error indicator - could be enhanced with LED or buzzer
-  static int blinkCount = 0;
-  if (blinkCount++ >= 3) blinkCount = 0;
-}
-
 /*
  * ============================================================================
- * CALIBRATION GUIDE FOR STUDENTS
+ * MAGNETOMETER CALIBRATION GUIDE
  * ============================================================================
  * 
- * Magnetometer Calibration (Figure-8 Method):
- *   1. Add this code to setup():
- *      IMU_I2C_CalibrationMag();
- *   2. Run the program and pick up the vehicle
- *   3. Slowly rotate it in a figure-8 pattern in ALL THREE AXES
- *   4. Continue for ~30 seconds until calibration completes
- *   5. Note the offset values printed to Serial
- *   6. Add those offsets to MAG_CALIBRATION_OFFSET
+ * WHY CALIBRATION IS IMPORTANT:
+ * - Magnetometers measure local magnetic field, not just Earth's field
+ * - Motors, batteries, metal chassis create magnetic distortions
+ * - Hard iron: constant offset (fixed magnets or magnetized metal)
+ * - Soft iron: scaling/rotation distortion (metal nearby)
  * 
- * North Alignment:
- *   1. Point vehicle physically North (use phone compass)
- *   2. Note the yaw reading in Serial monitor
- *   3. Set MAG_CALIBRATION_OFFSET = -yaw_reading
- *   4. Now yaw should read 0° when pointing North
+ * FIGURE-8 CALIBRATION PROCESS:
+ * 1. Pick up the vehicle (don't keep it on the ground)
+ * 2. Rotate slowly in figure-8 pattern
+ * 3. Make sure to rotate in ALL THREE AXES:
+ *    - Roll (tilt left/right)
+ *    - Pitch (tilt forward/back)
+ *    - Yaw (rotate horizontally)
+ * 4. Continue for ~30 seconds until calibration completes
+ * 5. Note the offset values printed
+ * 6. Add them to your code permanently
  * 
- * Servo Direction:
- *   If vehicle turns opposite to expected:
- *   - Swap MIN_STEERING and MAX_STEERING values
- *   - Or negate HEADING_GAIN (make it negative)
+ * PERMANENT CALIBRATION:
+ * After successful calibration, add these lines to your code:
+ * 
+ *   #define MAG_OFFSET_X  XX.XXXX
+ *   #define MAG_OFFSET_Y  YY.YYYY
+ *   #define MAG_OFFSET_Z  ZZ.ZZZZ
+ *   #define NORTH_OFFSET  NN.NNNN
+ * 
+ * Then in setup(), skip the calibration steps and use these values directly.
  * 
  * ============================================================================
  * TROUBLESHOOTING
  * ============================================================================
  * 
- * Problem: Vehicle spins in circles
- *   Fix: Check that MIN/MAX steering values match your servo direction
- *   
- * Problem: Heading drifts over time
- *   Fix: This is normal for dead reckoning - use GPS for correction
- *   
- * Problem: Erratic heading readings
+ * Problem: Calibration still varies after figure-8
  *   Fix: 
- *     - Calibrate magnetometer (figure-8 method)
- *     - Keep away from large metal objects or magnets
- *     - Check I2C connections are secure
- *   
- * Problem: IMU not found
- *   Fix:
- *     - Verify I2C address (should be 0x68 for most IMUs)
- *     - Check SDA/SCL wiring
- *     - Ensure IMU has proper power (3.3V or 5V)
+ *     - Move away from metal objects, cars, buildings
+ *     - Keep away from motors and power wires (turn them off during calibration)
+ *     - Rotate more slowly and cover all 3 axes
+ *     - Try recalibrating in a different location
+ * 
+ * Problem: Yaw drifts over time while driving
+ *   Fix: This is normal! Use GPS to periodically correct heading
+ *        (See Example 4 for sensor fusion)
+ * 
+ * Problem: Erratic steering corrections
+ *   Fix: Reduce HEADING_GAIN or add D-term to smooth response
  * 
  * ============================================================================
  */

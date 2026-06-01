@@ -1,26 +1,17 @@
 /*
- * Example 2: IMU Heading Maintenance (Dead Reckoning)
- * ===================================================
+ * Example 2: IMU Heading Maintenance (Dead Reckoning) - TEST VERSION
+ * ===================================================================
  * 
- * This example demonstrates heading control using only the IMU (Inertial 
- * Measurement Unit), without GPS. The vehicle will maintain a set heading
- * even when GPS signal is lost.
+ * This test version will:
+ * 1. Read current yaw when facing North
+ * 2. Set calibration offset so yaw = 0° at North
+ * 3. Maintain heading automatically
  * 
  * Hardware Required:
  *   - Arduino Giga R1 WiFi
  *   - Yahboom 9-axis IMU connected to I2C (Wire)
  *   - Steering Servo connected to Pin 7
  *   - ESC connected to Pin 6
- * 
- * How It Works:
- *   The IMU provides yaw (heading) angle via the magnetometer. We compare
- *   the current heading to a target heading and adjust steering proportionally.
- * 
- * Student Notes:
- *   - This is DEAD RECKONING - position drifts over time without GPS correction
- *   - Magnetometer must be calibrated for accurate heading
- *   - Works indoors where GPS doesn't work!
- *   - Magnetic interference can affect accuracy
  */
 
 #include <Servo.h>
@@ -52,9 +43,8 @@
 // IMU SETTINGS
 // ============================================================================
 
-// Heading offset to align IMU "North" with real North
-// Adjust this so yaw reads 0° when vehicle points North
-#define MAG_CALIBRATION_OFFSET  0.0   // Start at 0, calibrate later
+// This will be set automatically during calibration
+float MAG_CALIBRATION_OFFSET = 98.75;
 
 // Control parameters
 #define HEADING_GAIN     25.0    // Proportional gain for heading error (radians)
@@ -64,9 +54,7 @@
 // TARGET HEADING
 // ============================================================================
 
-// Target heading in radians (0 = North, PI/2 = East, PI = South, etc.)
-// You can set this to any direction you want the vehicle to maintain
-float targetHeading = 0.0;  // Start facing North
+float targetHeading = 0.0;  // North (will be set after calibration)
 
 // ============================================================================
 // GLOBAL VARIABLES
@@ -76,7 +64,7 @@ Servo steeringServo;  // Servo for steering
 Servo escServo;       // Servo for ESC (throttle)
 
 float currentYaw = 0;      // Current heading from IMU (radians)
-float lastError = 0;       // Previous error (for potential D-term later)
+bool calibrationDone = false;
 
 // ============================================================================
 // SETUP - Runs once at startup
@@ -87,7 +75,7 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   
-  Serial.println(F("\n=== IMU Heading Maintenance ==="));
+  Serial.println(F("\n=== IMU Heading Maintenance - TEST ==="));
   Serial.println(F("Initializing..."));
   
   // Initialize I2C bus
@@ -112,7 +100,6 @@ void setup() {
     Serial.println(F("  - Check power to IMU module"));
     while (1) {
       delay(1000);
-      blinkError();
     }
   }
   
@@ -135,30 +122,62 @@ void setup() {
   }
   
   // =====================================================
-  // CALIBRATION: Magnetometer (Optional but recommended)
+  // CALIBRATION: North Alignment (Auto-detect current yaw)
   // =====================================================
-  Serial.println(F("\n>>> STEP 2: Magnetometer Check"));
-  Serial.println(F("Current yaw reading: "));
+  Serial.println(F("\n>>> STEP 2: North Alignment"));
+  Serial.println(F("Make sure truck is facing NORTH..."));
+  delay(3000);
   
   float euler[3];
-  if (IMU_I2C_ReadEuler(euler) == 0) {
-    currentYaw = euler[2];  // Yaw is the third value
-    Serial.print(currentYaw * 180.0 / PI);  // Convert to degrees for display
-    Serial.println(F(" degrees"));
-    
-    // Apply calibration offset
-    currentYaw += MAG_CALIBRATION_OFFSET;
-    
-    // Set initial target heading to current heading
-    targetHeading = currentYaw;
-    Serial.print(F("Target heading set to: "));
-    Serial.print(currentYaw * 180.0 / PI);
-    Serial.println(F(" degrees"));
+  int readCount = 0;
+  float sumYaw = 0;
+  
+  // Take multiple readings and average them
+  Serial.println(F("Reading yaw values (take 10 samples)..."));
+  for (int i = 0; i < 10; i++) {
+    if (IMU_I2C_ReadEuler(euler) == 0) {
+      float rawYaw = euler[2];
+      sumYaw += rawYaw;
+      Serial.print(F("  Sample "));
+      Serial.print(i + 1);
+      Serial.print(F(": "));
+      Serial.print(rawYaw * 180.0 / PI, 2);
+      Serial.println(F("°"));
+    }
+    delay(200);
   }
   
+  float avgYaw = sumYaw / 10.0;
+  Serial.println(F("\n>>> Average raw yaw: "));
+  Serial.print(avgYaw * 180.0 / PI, 2);
+  Serial.println(F("°"));
+  
+  // Set calibration offset so yaw = 0 when facing North
+  MAG_CALIBRATION_OFFSET = -avgYaw;
+  Serial.println(F(">>> Setting MAG_CALIBRATION_OFFSET: "));
+  Serial.print(MAG_CALIBRATION_OFFSET * 180.0 / PI, 2);
+  Serial.println(F("°"));
+  
+  // Verify the offset works
+  if (IMU_I2C_ReadEuler(euler) == 0) {
+    currentYaw = euler[2] + MAG_CALIBRATION_OFFSET;
+    Serial.println(F("\n>>> Verification:"));
+    Serial.print(F("  Corrected yaw when facing North: "));
+    Serial.print(currentYaw * 180.0 / PI, 2);
+    Serial.println(F("° (should be ~0°)"));
+  }
+  
+  // Set target heading to North (0 radians)
+  targetHeading = 0.0;
+  Serial.println(F("\n>>> Target heading set to: NORTH (0°)"));
+  
+  calibrationDone = true;
+  
   Serial.println(F("\n=== Setup Complete ==="));
-  Serial.println(F("Vehicle will now maintain its heading."));
-  Serial.println(F("Press reset to change target heading."));
+  Serial.println(F("Vehicle will now maintain North heading."));
+  Serial.println(F("Press reset to re-calibrate."));
+  
+  delay(2000);
 }
 
 // ============================================================================
@@ -230,54 +249,20 @@ void loop() {
   delay(CONTROL_RATE_MS);
 }
 
-// ============================================================================
-// HELPER FUNCTION: Blink LED to indicate error
-// ============================================================================
-
-void blinkError() {
-  // Simple error indicator - could be enhanced with LED or buzzer
-  static int blinkCount = 0;
-  if (blinkCount++ >= 3) blinkCount = 0;
-}
-
 /*
- * ============================================================================
- * CALIBRATION GUIDE FOR STUDENTS
- * ============================================================================
- * 
- * Magnetometer Calibration (Figure-8 Method):
- *   1. Add this code to setup():
- *      IMU_I2C_CalibrationMag();
- *   2. Run the program and pick up the vehicle
- *   3. Slowly rotate it in a figure-8 pattern in ALL THREE AXES
- *   4. Continue for ~30 seconds until calibration completes
- *   5. Note the offset values printed to Serial
- *   6. Add those offsets to MAG_CALIBRATION_OFFSET
- * 
- * North Alignment:
- *   1. Point vehicle physically North (use phone compass)
- *   2. Note the yaw reading in Serial monitor
- *   3. Set MAG_CALIBRATION_OFFSET = -yaw_reading
- *   4. Now yaw should read 0° when pointing North
- * 
- * Servo Direction:
- *   If vehicle turns opposite to expected:
- *   - Swap MIN_STEERING and MAX_STEERING values
- *   - Or negate HEADING_GAIN (make it negative)
- * 
  * ============================================================================
  * TROUBLESHOOTING
  * ============================================================================
  * 
- * Problem: Vehicle spins in circles
+ * Problem: Vehicle spins in circles immediately
  *   Fix: Check that MIN/MAX steering values match your servo direction
  *   
- * Problem: Heading drifts over time
- *   Fix: This is normal for dead reckoning - use GPS for correction
+ * Problem: Vehicle turns opposite direction
+ *   Fix: Swap MIN_STEERING and MAX_STEERING values
  *   
  * Problem: Erratic heading readings
  *   Fix: 
- *     - Calibrate magnetometer (figure-8 method)
+ *     - Calibrate magnetometer (run again with figure-8 rotation)
  *     - Keep away from large metal objects or magnets
  *     - Check I2C connections are secure
  *   

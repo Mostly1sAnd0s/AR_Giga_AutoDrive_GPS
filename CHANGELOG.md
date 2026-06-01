@@ -2,6 +2,50 @@
 
 All notable changes to the `AR_Giga_AutoDrive_GPS` project will be documented in this file.
 
+## [2.2.0] - 2026-05-31 - Smoothing Algorithm Fix & Driver Timing Updates
+
+### Fixed
+- **Angle-aware smoothing**: Fixed smoothing algorithm to handle ±180° wrap-around correctly
+  - Previous bug: Smoothing saw -179° → +179° as a 358° jump instead of 2°
+  - Solution: Normalize difference before applying smooth filter
+- **I2C read timing**: Added delays between sensor reads in `IMU_I2C_ReadAll()`
+  - Problem: Reading sensors too fast caused stale magnetometer data (X stuck at -18.751)
+  - Solution: 500µs delay between each sensor read allows IMU to update registers
+- **Mag X sensitivity**: Magnetometer X-axis now updates correctly when rotating
+
+### Clarified
+- **IMU Euler output is CORRECT**: No firmware bug exists in the native Euler yaw output
+  - Previous documentation incorrectly claimed "Euler jumps when W crosses zero"
+  - Reality: The IMU's Euler yaw is smooth and accurate
+  - The actual issue was in how we applied smoothing, not the sensor data itself
+- **Quaternion math works**: Standard quaternion-to-yaw formula (`atan2`) is correct
+  - Continuous yaw tracking via delta accumulation works perfectly
+  - Can use either native Euler or quaternion-derived yaw (both are valid)
+
+### Created Diagnostic Tools
+- `IMUDiagnostic/` - Raw sensor data output for IMU analysis
+- `IMUYawDebug/` - Multiple yaw formula comparison (MY_F1, MY_F2, MY_F3)
+
+---
+
+## [2.1.0] - 2026-05-31 - IMU Magnetometer Calibration Fixes
+
+### Fixed
+- **Yaw overflow bug**: Yaw values showing >360° due to missing normalization before averaging
+- **Magnetometer offset persistence**: Added `IMU_I2C_SetMagOffsets()` to write calibration data to IMU RAM
+- **North alignment calculation**: Now properly normalizes yaw to [-180°, +180°] before averaging samples
+
+### Added
+- `Example_2_MagCalibration/` - Complete magnetometer calibration with figure-8 method and north alignment
+- Automatic offset writing to IMU RAM after successful calibration
+- Pre-loaded calibration values for quick deployment (X: 42.3353, Y: 8.7161, Z: 23.6091)
+
+### Changed
+- Improved calibration output with clear step-by-step instructions
+- Better telemetry display with normalized yaw values
+
+---
+
 ## [2.0.0] - 2026-05-30 - Major Refactor for Education
 
 ### Changed
