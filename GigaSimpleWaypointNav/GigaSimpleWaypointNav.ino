@@ -355,95 +355,88 @@ void loop() {
     return;
   }
   
-//  // GPS fix acquired - start navigation
-//  Serial.println(F("\n*** GPS FIX ACQUIRED - STARTING NAVIGATION ***"));
-//  Serial.print(F("Waypoints in route: "));
-//  Serial.println(NUM_WAYPOINTS);
-//  delay(2000);
-//  
-    // Handle commands during navigation too
-    handleSerialCommands();
+  // GPS fix acquired - start navigation
     
-    // Get current position
-    double currentLat = gps.location.lat();
-    double currentLon = gps.location.lng();
+  // Get current position
+  double currentLat = gps.location.lat();
+  double currentLon = gps.location.lng();
+  
+  // Get target waypoint
+  double targetLat = waypoints[currentWaypoint][0];
+  double targetLon = waypoints[currentWaypoint][1];
+  
+  // Calculate distance and bearing to waypoint
+  float distanceToWaypoint = gps.distanceBetween(
+    currentLat, currentLon, 
+    targetLat, targetLon
+  );
+  
+  float bearingToWaypoint = gps.courseTo(
+    currentLat, currentLon,
+    targetLat, targetLon
+  );
+  
+  // Get IMU yaw for heading stabilization
+  imu_measurement_t imuData;
+  float imuHeading = 0.0f;
+  
+  if (IMU_I2C_ReadAll(&imuData) == 0) {
+    //imuHeading = imuData.euler[2];
     
-    // Get target waypoint
-    double targetLat = waypoints[currentWaypoint][0];
-    double targetLon = waypoints[currentWaypoint][1];
+    // Alternative: Calculate heading from magnetometer with offsets
     
-    // Calculate distance and bearing to waypoint
-    float distanceToWaypoint = gps.distanceBetween(
-      currentLat, currentLon, 
-      targetLat, targetLon
-    );
+    float magX_cal = imuData.mag[0] - magOffset[0];
+    float magY_cal = imuData.mag[1] - magOffset[1];
+    imuHeading = atan2(magY_cal, magX_cal) * 57.2957795f;
+    imuHeading = normalizeAngle(imuHeading + northOffset);
     
-    float bearingToWaypoint = gps.courseTo(
-      currentLat, currentLon,
-      targetLat, targetLon
-    );
+  }
+  
+  // Smooth the heading
+  static float smoothedHeading = 0.0f;
+  smoothHeading(imuHeading, smoothedHeading, HEADING_SMOOTHING);
+  
+  // Calculate heading error
+  float headingError = bearingToWaypoint - smoothedHeading;
+  
+  // Normalize error to [-180, +180]
+  while (headingError > 180)  headingError -= 360;
+  while (headingError < -180) headingError += 360;
+  
+  // Calculate steering using proportional control
+  int steeringPosition = CENTER_STEERING + (int)((headingError * STEERINGDIR) * STEERING_GAIN);
+  steeringPosition = constrain(steeringPosition, MIN_STEERING, MAX_STEERING);
+  
+  // Apply controls - always moving forward
+  steeringServo.write(steeringPosition);
+  escServo.write(ESC_FORWARD);
+  
+  // Print status line every 500ms
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint > 500) {
+    lastPrint = millis();
+    printStatusLine(currentLat, currentLon, 
+                    targetLat, targetLon,
+                    distanceToWaypoint, bearingToWaypoint,
+                    smoothedHeading, headingError,
+                    steeringPosition, currentWaypoint);
+  }
+  
+  // Check if we've reached the waypoint
+  if (distanceToWaypoint < WAYPOINT_DISTANCE_THRESHOLD) {
+    Serial.print(F("\n*** Waypoint "));
+    Serial.print(currentWaypoint + 1);
+    Serial.println(F(" REACHED! ***"));
     
-    // Get IMU yaw for heading stabilization
-    imu_measurement_t imuData;
-    float imuHeading = 0.0f;
-    
-    if (IMU_I2C_ReadAll(&imuData) == 0) {
-      //imuHeading = imuData.euler[2];
-      
-      // Alternative: Calculate heading from magnetometer with offsets
-      
-      float magX_cal = imuData.mag[0] - magOffset[0];
-      float magY_cal = imuData.mag[1] - magOffset[1];
-      imuHeading = atan2(magY_cal, magX_cal) * 57.2957795f;
-      imuHeading = normalizeAngle(imuHeading + northOffset);
-      
+    // Move to next waypoint (cycle back to first after last)
+    currentWaypoint++;
+    if (currentWaypoint >= NUM_WAYPOINTS) {
+      currentWaypoint = 0;
+      Serial.println(F("Cycling back to first waypoint..."));
     }
     
-    // Smooth the heading
-    static float smoothedHeading = 0.0f;
-    smoothHeading(imuHeading, smoothedHeading, HEADING_SMOOTHING);
-    
-    // Calculate heading error
-    float headingError = bearingToWaypoint - smoothedHeading;
-    
-    // Normalize error to [-180, +180]
-    while (headingError > 180)  headingError -= 360;
-    while (headingError < -180) headingError += 360;
-    
-    // Calculate steering using proportional control
-    int steeringPosition = CENTER_STEERING + (int)((headingError*STEERINGDIR) * STEERING_GAIN);
-    steeringPosition = constrain(steeringPosition, MIN_STEERING, MAX_STEERING);
-    
-    // Apply controls - always moving forward
-    steeringServo.write(steeringPosition);
-    escServo.write(ESC_FORWARD);
-    
-    // Print status line every 500ms
-    static unsigned long lastPrint = 0;
-    if (millis() - lastPrint > 500) {
-      lastPrint = millis();
-      printStatusLine(currentLat, currentLon, 
-                      targetLat, targetLon,
-                      distanceToWaypoint, bearingToWaypoint,
-                      smoothedHeading, headingError,
-                      steeringPosition, currentWaypoint);
-    }
-    
-    // Check if we've reached the waypoint
-    if (distanceToWaypoint < WAYPOINT_DISTANCE_THRESHOLD) {
-      Serial.print(F("\n*** Waypoint "));
-      Serial.print(currentWaypoint + 1);
-      Serial.println(F(" REACHED! ***"));
-      
-      // Move to next waypoint (cycle back to first after last)
-      currentWaypoint++;
-      if (currentWaypoint >= NUM_WAYPOINTS) {
-        currentWaypoint = 0;
-        Serial.println(F("Cycling back to first waypoint..."));
-      }
-      
-      delay(1000);
-    }
-    
-    delay(50);
+    delay(1000);
+  }
+  
+  delay(50);
 }
