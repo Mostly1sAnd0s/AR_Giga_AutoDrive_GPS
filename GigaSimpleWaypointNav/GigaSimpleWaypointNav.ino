@@ -1,5 +1,5 @@
 /*
- * Stupid Simple Waypoint Navigation
+ * Giga Simple Waypoint Navigation
  * ==================================
  * 
  * Cycles through waypoints using GPS position and IMU heading.
@@ -20,6 +20,7 @@
  *   w/s - Increase/decrease STEERING_GAIN
  *   e/d - Increase/decrease HEADING_SMOOTHING
  *   r/f - Increase/decrease northOffset
+ *   p/l - Increase/decrease ESC_FORWARD
  */
 
 #include <Servo.h>
@@ -42,10 +43,11 @@
 #define CENTER_STEERING 90
 #define MIN_STEERING   70
 #define MAX_STEERING  130
+#define STEERINGDIR -1
 
 // ESC Settings
 #define ESC_STOP        90
-#define ESC_FORWARD    105
+int ESC_FORWARD = 105;
 
 // ============================================================================
 // NAVIGATION SETTINGS - Adjustable at runtime
@@ -54,9 +56,10 @@
 #define MIN_SATELLITES  4
 
 float WAYPOINT_DISTANCE_THRESHOLD = 3.0;
-float STEERING_GAIN = 0.4;
+float STEERING_GAIN = 0.65;
 float HEADING_SMOOTHING = 0.3;
 float northOffset = 0.0;
+int currentWaypoint = 0;
 
 // Adjustment step sizes
 #define DISTANCE_STEP   0.5
@@ -70,18 +73,18 @@ float northOffset = 0.0;
 float magOffset[3] = {-3.1251, 0.6836, -4.1505};
 
 // ============================================================================
-// WAYPOINT ARRAY
+// WAYPOINTS
 // ============================================================================
 
-const double TARGET_LATITUDE  = 40.34221549544099;
-const double TARGET_LONGITUDE = -74.69684288556215;
+#define NUM_WAYPOINTS 6
 
-double waypoints[5][2]={
+double waypoints[NUM_WAYPOINTS][2] = {
   {40.34225882621459, -74.69668462475289},
   {40.342599825494446, -74.69651325674255},
   {40.34270813578766, -74.69660530051675},
   {40.34266760030346, -74.69677739146624},
-  {40.34234797923362, -74.69693786300246}
+  {40.34234797923362, -74.69693786300246},
+  {40.34221549544099, -74.69684288556215}
 };
 
 // ============================================================================
@@ -135,7 +138,8 @@ void printStatusLine(double currentLat, double currentLon,
   Serial.print(steeringPosition);
   Serial.print(F(" | [WP] "));
   Serial.print(currentWaypoint + 1);
-  Serial.print(F("/5"));
+  Serial.print(F("/"));
+  Serial.print(NUM_WAYPOINTS);
   Serial.print(F(" | [Params] TH="));
   Serial.print(WAYPOINT_DISTANCE_THRESHOLD, 1);
   Serial.print(F(" G="));
@@ -154,7 +158,7 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   
-  Serial.println(F("\n=== Stupid Simple Waypoint Navigation ==="));
+  Serial.println(F("\n=== Giga Simple Waypoint Navigation ==="));
   Serial.println(F("Initializing..."));
   
   // Initialize GPS
@@ -295,6 +299,18 @@ void handleSerialCommands() {
         Serial.print(F("> North Offset: "));
         Serial.println(northOffset, 1);
         break;
+      case 'p': // Increase north offset
+        ESC_FORWARD++;
+        ESC_FORWARD = constrain(ESC_FORWARD,0,180);
+        Serial.print(F("> Speed: "));
+        Serial.println(ESC_FORWARD);
+        break;
+      case 'l': // Decrease north offset
+        ESC_FORWARD--;
+        ESC_FORWARD = constrain(ESC_FORWARD,0,180);
+        Serial.print(F("> Speed: "));
+        Serial.println(ESC_FORWARD);
+        break;
         
       case 'h': // Help
         Serial.println();
@@ -303,6 +319,7 @@ void handleSerialCommands() {
         Serial.println(F("w/s - Steering gain (+/-)"));
         Serial.println(F("e/d - Heading smoothing (+/-)"));
         Serial.println(F("r/f - North offset (+/-)"));
+        Serial.println(F("p/l - Speed adjust (+/-)"));
         Serial.println();
         break;
     }
@@ -338,15 +355,12 @@ void loop() {
     return;
   }
   
-  // GPS fix acquired - start navigation
-  Serial.println(F("\n*** GPS FIX ACQUIRED - STARTING NAVIGATION ***"));
-  Serial.print(F("Waypoints in route: "));
-  Serial.println(5);
-  delay(2000);
-  
-  int currentWaypoint = 0;
-  
-  while (true) {
+//  // GPS fix acquired - start navigation
+//  Serial.println(F("\n*** GPS FIX ACQUIRED - STARTING NAVIGATION ***"));
+//  Serial.print(F("Waypoints in route: "));
+//  Serial.println(NUM_WAYPOINTS);
+//  delay(2000);
+//  
     // Handle commands during navigation too
     handleSerialCommands();
     
@@ -355,15 +369,8 @@ void loop() {
     double currentLon = gps.location.lng();
     
     // Get target waypoint
-    double targetLat, targetLon;
-    
-    if (currentWaypoint == 0) {
-      targetLat = TARGET_LATITUDE;
-      targetLon = TARGET_LONGITUDE;
-    } else {
-      targetLat = waypoints[currentWaypoint - 1][0];
-      targetLon = waypoints[currentWaypoint - 1][1];
-    }
+    double targetLat = waypoints[currentWaypoint][0];
+    double targetLon = waypoints[currentWaypoint][1];
     
     // Calculate distance and bearing to waypoint
     float distanceToWaypoint = gps.distanceBetween(
@@ -381,15 +388,15 @@ void loop() {
     float imuHeading = 0.0f;
     
     if (IMU_I2C_ReadAll(&imuData) == 0) {
-      imuHeading = imuData.euler[2];
+      //imuHeading = imuData.euler[2];
       
       // Alternative: Calculate heading from magnetometer with offsets
-      /*
+      
       float magX_cal = imuData.mag[0] - magOffset[0];
       float magY_cal = imuData.mag[1] - magOffset[1];
       imuHeading = atan2(magY_cal, magX_cal) * 57.2957795f;
       imuHeading = normalizeAngle(imuHeading + northOffset);
-      */
+      
     }
     
     // Smooth the heading
@@ -404,7 +411,7 @@ void loop() {
     while (headingError < -180) headingError += 360;
     
     // Calculate steering using proportional control
-    int steeringPosition = CENTER_STEERING + (int)(headingError * STEERING_GAIN);
+    int steeringPosition = CENTER_STEERING + (int)((headingError*STEERINGDIR) * STEERING_GAIN);
     steeringPosition = constrain(steeringPosition, MIN_STEERING, MAX_STEERING);
     
     // Apply controls - always moving forward
@@ -430,7 +437,7 @@ void loop() {
       
       // Move to next waypoint (cycle back to first after last)
       currentWaypoint++;
-      if (currentWaypoint >= 5) {
+      if (currentWaypoint >= NUM_WAYPOINTS) {
         currentWaypoint = 0;
         Serial.println(F("Cycling back to first waypoint..."));
       }
@@ -439,5 +446,4 @@ void loop() {
     }
     
     delay(50);
-  }
 }
